@@ -1,0 +1,165 @@
+﻿#version: '2'
+services:
+  # ZooKeeper - координационный сервис для Kafka.
+  # Упрощает управление системами с множеством узлов и хранит метаданные.
+  # Как это работает: ZooKeeper управляет информацией о брокерах, темах и разделах.
+  # Клиенты подключаются к ZooKeeper для получения информации о кластере Kafka и для координации действий.
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"  # Порт для клиентских подключений
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  # Broker Kafka - главный компонент системы, который обрабатывает сообщения.
+  # Отвечает за запись, хранение и передачу сообщений.
+  # Как это работает: Брокеры взаимодействуют с ZooKeeper для управления метаданными и координации.
+  # Сообщения хранятся в темах, которые разделены на разделы для параллельной обработки.
+  broker:
+    image: confluentinc/cp-server:7.4.0
+    hostname: broker
+    container_name: broker
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"  # Порт для подключения клиентов
+      - "9101:9101"  # Порт для JMX (Java Management Extension) мониторинга
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      # Другие переменные окружения...
+
+  # Schema Registry - компонент для управления схемами данных, используемыми в Kafka.
+  # Позволяет поддерживать различные версии схем и совместимость между ними.
+  # Как это работает: Клиенты могут регистрировать и получать схемы через REST API.
+  # Schema Registry хранит схемы в Kafka и обеспечивает их доступность для всех клиентов.
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.4.0
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      - broker
+    ports:
+      - "8081:8081"  # Порт для доступа к реестру схем
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker:29092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  # Connect - компонент Kafka, который позволяет интегрировать Kafka с другими системами.
+  # Позволяет получать данные из внешних источников и отправлять их в Kafka.
+  # Как это работает: Connect использует коннекторы для подключения к внешним системам.
+  # Коннекторы могут быть настроены через REST API, и они автоматически обрабатывают данные, передавая их в Kafka или из Kafka.
+  connect:
+   # image: cnfldemos/cp-server-connect-datagen:0.4.0-6.1.0
+    image: cnfldemos/cp-server-connect-datagen:7.4.0
+    hostname: connect
+    container_name: connect
+    depends_on:
+      - broker
+      - schema-registry
+    ports:
+      - "8083:8083"  # Порт для REST API Connect
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: 'broker:29092'
+      # Другие переменные окружения...
+
+  # Control Center - UI для мониторинга и управления кластерами Kafka.
+  # Позволяет отслеживать производительность и состояние сервисов.
+  # Как это работает: Control Center собирает метрики и логи от всех компонентов Kafka и отображает их в удобном интерфейсе.
+  # Он также позволяет выполнять административные задачи, такие как управление темами и потребителями.
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.4.0
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - broker
+      - schema-registry
+      - connect
+      - ksqldb-server
+    ports:
+      - "9021:9021"  # Порт для доступа к Control Center
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'broker:29092'
+      # Другие переменные окружения...
+
+  # ksqlDB Server - сервер для работы с ksqlDB, который позволяет выполнять SQL-запросы на потоках данных в Kafka.
+  # Позволяет обрабатывать данные в реальном времени.
+  # Как это работает: ksqlDB Server принимает SQL-запросы от клиентов и выполняет их на данных, хранящихся в Kafka.
+  # Результаты запросов могут быть записаны обратно в Kafka или переданы клиентам.
+  ksqldb-server:
+    image: confluentinc/cp-ksqldb-server:7.4.0
+    hostname: ksqldb-server
+    container_name: ksqldb-server
+    depends_on:
+      - broker
+      - connect
+    ports:
+      - "8088:8088"  # Порт для доступа к ksqlDB
+    environment:
+      KSQL_BOOTSTRAP_SERVERS: "broker:29092"
+      # Другие переменные окружения...
+
+  # ksqlDB CLI - интерфейс командной строки для взаимодействия с ksqlDB.
+  # Позволяет отправлять SQL-запросы и управлять потоками данных.
+  # Как это работает: Пользователи могут подключаться к ksqlDB Server через CLI и выполнять SQL-запросы для анализа и обработки данных в реальном времени.
+  ksqldb-cli:
+    image: confluentinc/cp-ksqldb-cli:7.4.0
+    container_name: ksqldb-cli
+    depends_on:
+      - broker
+      - connect
+      - ksqldb-server
+    entrypoint: /bin/sh
+    tty: true
+
+  # ksql-datagen - сервис для генерации тестовых данных для ksqlDB.
+  # Помогает в тестировании и разработке, предоставляя фиктивные потоки данных.
+  # Как это работает: ksql-datagen генерирует данные на основе заданных схем и отправляет их в Kafka.
+  # Это позволяет разработчикам тестировать свои приложения и запросы на реальных данных.
+  ksql-datagen:
+    image: confluentinc/ksqldb-examples:7.4.0
+    hostname: ksql-datagen
+    container_name: ksql-datagen
+    depends_on:
+      - ksqldb-server
+      - broker
+      - schema-registry
+      - connect
+    command: "bash -c 'echo Waiting for Kafka to be ready... && \
+                       cub kafka-ready -b broker:29092 1 40 && \
+                       echo Waiting for Confluent Schema Registry to be ready... && \
+                       cub sr-ready schema-registry 8081 40 && \
+                       echo Waiting a few seconds for topic creation to finish... && \
+                       sleep 11 && \
+                       tail -f /dev/null'"
+    environment:
+      KSQL_CONFIG_DIR: "/etc/ksql"
+      STREAMS_BOOTSTRAP_SERVERS: broker:29092
+      STREAMS_SCHEMA_REGISTRY_HOST: schema-registry
+      STREAMS_SCHEMA_REGISTRY_PORT: 8081
+
+  # REST Proxy - предоставляет RESTful интерфейс для взаимодействия с Kafka.
+  # Позволяет производить и потреблять сообщения через HTTP.
+  # Как это работает: Клиенты могут отправлять HTTP-запросы к REST Proxy для публикации и потребления сообщений в Kafka.
+  # REST Proxy преобразует HTTP-запросы в нативные запросы Kafka и обратно.
+  rest-proxy:
+    image: confluentinc/cp-kafka-rest:7.4.0
+    depends_on:
+      - broker
+      - schema-registry
+    ports:
+      - 8082:8082
+    hostname: rest-proxy
+    container_name: rest-proxy
+    environment:
+      KAFKA_REST_HOST_NAME: rest-proxy
+      KAFKA_REST_BOOTSTRAP_SERVERS: 'broker:29092'
+      KAFKA_REST_LISTENERS: "http://0.0.0.0:8082"
+      KAFKA_REST_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+
